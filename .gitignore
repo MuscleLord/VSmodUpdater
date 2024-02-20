@@ -1,0 +1,12 @@
+**/__pycache__
+**/Logs
+**/dist
+**/build
+**/output
+backup.txt
+modsdir.txt
+*.log
+*.spec
+*.bat
+*.DS_Store
+Thumbs.db
