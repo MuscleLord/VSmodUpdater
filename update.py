@@ -9,6 +9,7 @@
  |   |    \_/  |____/|_| |_| |_|\___/ \__,_| |   | 
  |___|                                       |___| 
 (_____)-------------------------------------(_____)
+
 """
 
 import requests
@@ -201,10 +202,11 @@ class VSmodUpdater:
         self.MAIN_API = "http://mods.vintagestory.at/api"
         self.MOD_API = f"{self.MAIN_API}/mod/"
         self.PATH_OUT = ".\\output"
-
+        self.stable_release_tag = None
         self.modlist = None
         self.mod_info_list = []
         self.new_changes = []
+        self.mod_update_list = []
         self.modpath = None
         self.terminalSize(125, 70)
         os.system("cls")
@@ -273,6 +275,10 @@ class VSmodUpdater:
     mods_sres = requests.get(new_url, timeout=60)
     print(json.dumps(mods_sres.json(), indent=2))
     """
+
+    def handle_exception(self, e, _flush=True):
+        print(e, flush=_flush)
+        Error(e)
 
     #########################
     def Handle_dirs(self):
@@ -357,8 +363,172 @@ class VSmodUpdater:
 
         self.separator("_", 50)
 
+    async def get_stable_release(self):
+        try:
+            stable_res = requests.get(f"{self.MAIN_API}/gameversions", timeout=60)
+            stable_json = stable_res.json()
+            self.stable_release_tag = stable_json["gameversions"]
+            for versions in self.stable_release_tag:
+                if "-rc" in versions["name"]:
+                    continue
+                else:
+                    self.stable_release_tag = versions["name"].replace("v", "")
+                    break
+
+            # print(f"Stable release tag: {self.stable_release_tag}",flush=True)
+            Events(f"Stable release tag: {self.stable_release_tag}")
+        except requests.exceptions.Timeout as e:
+            print("WEB_HTML: requests.exceptions.Timeout:", e)
+            Error(f"WEB_HTML: requests.exceptions.Timeout: {e}")
+        except Exception as e:
+            print(e)
+            Error(e)
+
+    async def download_latest_mod(self):
+
+        noFlush = False
+        self.separator("#", 50, noFlush)
+        print("\nDownloading updates for mods...\n", flush=noFlush)
+        self.separator("#", 50, noFlush)
+        for objs in self.mod_update_list:
+            # self.separator("_", 50, noFlush)
+            # self.separator("#", 50, noFlush)
+            mod = objs["mod"]
+            releases = objs["releases"]
+
+            print(
+                f"\nUpdating {TextColor.GREEN}{mod['name']}{TextColor.RESET}",
+                flush=noFlush,
+            )
+            Events(f"{mod['name']} is updating!")
+
+            try:
+                # Pull data from HTML at the mod website for changelog. API don't serve specifics in it for that as it seems for now.
+                MOD_URL = f"{self.HOME_URL}{str(mod['modid'])}"
+                mod_changelog_res = requests.get(MOD_URL, timeout=60)
+
+                CHLOG_NAME = "changelogtext"
+                # regex = r""
+                # for m in CHLOG_NAME:
+                #    regex = regex + r"[\_\-\.'\!\s]*" + m
+                # regex = regex + r"[\_\-\.'\!\s]*"
+
+                # html_chname = mod_changelog_res.text.strip(" _-.'!")  # useless!?
+                url_chname = bs(mod_changelog_res.text, features="html.parser")
+                # print(url_chname)
+                # search in html for '<div class="changelogtext">' tags.
+                res_chname = url_chname.find_all(
+                    "div",
+                    class_=CHLOG_NAME,
+                )
+
+                chlog_text = ""
+                if len(res_chname) < 1:
+                    Events("No changlog where found")
+                else:
+                    chlog_text = res_chname[0].get_text()
+                    """
+                    Get first '<div class="changelogtext">' where latest changlog text is ans extract it.
+                    ex:
+                    <div class="changelogtext" style="display:none;">
+                        <strong>v1.7.4</strong><br>
+                        <h3>Changelog</h3>
+                        <ul>
+                            <li>Fix Japanese translation - thanks @RikeiR.</li>
+                            <li>Fix issue when unable to place carried block</li>
+                        </ul>
+                    </div>
+
+                    """
+
+                ####################
+                print(
+                    f"Current version= {TextColor.RED}{mod['version']}{TextColor.RESET} >>> new version= {bcolors.BRIGHT_CYAN}{releases['modversion']}{TextColor.RESET}",
+                    flush=noFlush,
+                )
+                Events(
+                    f"Current version= {mod['version']} >>> new version= {releases['modversion']}"
+                )
+                chlogvStr = f"{CHLOG_NAME} v{releases['modversion']}:"
+                self.separator("-", len(chlogvStr), noFlush)
+                print(TextColor.CYAN, flush=noFlush)
+                print(f"ChangeLog v{releases['modversion']}:", flush=noFlush)
+                Events(f"ChangeLog v{releases['modversion']}:")
+
+                for lines in chlog_text.splitlines():
+                    if f"v{releases['modversion']}" not in lines:
+                        new_str = ""
+                        # wordwrap long lines
+                        if len(lines) > 70:
+                            sl = lines.split(" ")
+                            count = 0
+                            for words in sl:
+                                new_str += words + " "
+                                count += 1
+                                max_words_ln = 14
+                                if count == max_words_ln:
+                                    new_str += "\n\t"
+
+                        print(f"\t{new_str}", flush=noFlush)
+                        Events(f"\t{new_str}")
+                print(TextColor.RESET, flush=noFlush)
+                self.separator("-", len(chlogvStr), noFlush)
+
+            except IndexError as e:
+                self.handle_exception(f"IndexError: {e}", noFlush)
+            except requests.exceptions.Timeout as e:
+                self.handle_exception(
+                    f"WEB_HTML: requests.exceptions.Timeout: {e}", noFlush
+                )
+            except Exception as e:
+                self.handle_exception(e, noFlush)
+            #################################
+            print(
+                f"\n{TextColor.BRIGHT_YELLOW}Downloading from:{TextColor.RESET}",
+                flush=True,
+            )
+            Events(f"Downloading from:")
+
+            def bar_custom(current, total, width=80):
+                progress = current / total
+                bar_width = int(width * progress)
+                bar = f"[{'=' * bar_width}{' ' * (width - bar_width)}] {progress * 100:.1f}%"
+                sys.stdout.write(f"\r{bar}")
+                sys.stdout.flush()
+
+            print(TextColor.BRIGHT_MAGENTA, flush=noFlush)
+            file_id = releases["fileid"]
+            downlink = f"{self.HOME_URL}download?fileid={str(file_id)}"
+            Events("url: " + downlink)
+            print(downlink, flush=True)
+            repl_str = f"{self.PATH_OUT}/"
+            """
+            wget_test = (
+                "http://speedtest.wdc01.softlayer.com/downloads/test500.zip"
+            )
+            wres = wget.download(
+                wget_test, out=None, bar=bar_custom
+            ).replace(repl_str, "")
+            """
+            response = wget.download(
+                downlink, out=self.PATH_OUT, bar=bar_custom
+            ).replace(repl_str, "")
+            Events("Downloading file: " + response)
+
+            print(TextColor.RESET, flush=noFlush)
+            print(
+                f"\nDone! Check output folder for file: {response}\n",
+                flush=noFlush,
+            )
+            Events(f"Done! Check output folder for file: {response}")
+            #################################
+            self.separator("#", 50, noFlush)
+
+            self.separator("_", 50, noFlush)
+
     async def CheckForUpdates(self):
-        doFlush = False
+        noFlush = False
+        # await self.get_stable_release()
         Events("Checking for updates...")
         print("\nChecking for updates...\n", flush=True)
         await asyncio.sleep(2)
@@ -376,184 +546,70 @@ class VSmodUpdater:
                     res_modinfo = mod_res.json()["mod"]
                     asset_id = res_modinfo["assetid"]
                     releases = res_modinfo["releases"][0]
-                    if releases["modversion"] != mod["version"]:
-                        self.separator("_", 50, doFlush)
-                        self.separator("#", 50, doFlush)
+
+                    # REGION changes
+                    if (
+                        releases["modversion"] != mod["version"]
+                        and "-rc"
+                        not in releases["tags"][0]  # ignore release candidates
+                    ):
 
                         print(
-                            f"\n{TextColor.GREEN}{mod['name']}{TextColor.RESET} has a newer version!",
-                            flush=doFlush,
+                            f"{TextColor.GREEN}{mod['name']}{TextColor.RESET}{TextColor.BG_BRIGHT_RED} {TextColor.BRIGHT_YELLOW}has a newer version! {TextColor.RESET}",
+                            flush=noFlush,
                         )
                         Events(f"{mod['name']} has a newer version!")
                         self.new_changes.append("x")
-                        try:
-                            # Pull data from HTML at the mod website for changelog. API don't serve specifics in it for that as it seems for now.
-                            MOD_URL = f"{self.HOME_URL}{str(mod['modid'])}"
-                            mod_changelog_res = requests.get(MOD_URL, timeout=60)
+                        self.mod_update_list.append({"mod": mod, "releases": releases})
 
-                            CHLOG_NAME = "changelogtext"
-                            # regex = r""
-                            # for m in CHLOG_NAME:
-                            #    regex = regex + r"[\_\-\.'\!\s]*" + m
-                            # regex = regex + r"[\_\-\.'\!\s]*"
-
-                            # html_chname = mod_changelog_res.text.strip(" _-.'!")  # useless!?
-                            url_chname = bs(
-                                mod_changelog_res.text, features="html.parser"
-                            )
-                            # print(url_chname)
-                            # search in html for '<div class="changelogtext">' tags.
-                            res_chname = url_chname.find_all(
-                                "div",
-                                class_=CHLOG_NAME,
-                            )
-
-                            chlog_text = ""
-                            if len(res_chname) < 1:
-                                print("no changelog found", flush=doFlush)
-                                Events("No changlog where found")
-                            else:
-                                chlog_text = res_chname[0].get_text()
-                                """
-                                Get first '<div class="changelogtext">' where latest changlog text is ans extract it.
-                                ex:
-                                <div class="changelogtext" style="display:none;">
-                                    <strong>v1.7.4</strong><br>
-                                    <h3>Changelog</h3>
-                                    <ul>
-                                        <li>Fix Japanese translation - thanks @RikeiR.</li>
-                                        <li>Fix issue when unable to place carried block</li>
-                                    </ul>
-                                </div>
-
-                                """
-
-                            ####################
-                            print(
-                                f"Current version= {TextColor.RED}{mod['version']}{TextColor.RESET} >>> new version= {bcolors.BRIGHT_CYAN}{releases['modversion']}{TextColor.RESET}",
-                                flush=doFlush,
-                            )
-                            Events(
-                                f"Current version= {mod['version']} >>> new version= {releases['modversion']}"
-                            )
-                            chlogvStr = f"{CHLOG_NAME} v{releases['modversion']}:"
-                            self.separator("-", len(chlogvStr), doFlush)
-                            print(TextColor.CYAN, flush=doFlush)
-                            print(
-                                f"ChangeLog v{releases['modversion']}:", flush=doFlush
-                            )
-                            Events(f"ChangeLog v{releases['modversion']}:")
-
-                            for lines in chlog_text.splitlines():
-                                if f"v{releases['modversion']}" not in lines:
-                                    new_str = ""
-                                    # wordwrap long lines
-                                    if len(lines) > 70:
-                                        sl = lines.split(" ")
-                                        count = 0
-                                        for words in sl:
-                                            new_str += words + " "
-                                            count += 1
-                                            max_words_ln = 14
-                                            if count == max_words_ln:
-                                                new_str += "\n\t"
-
-                                    print(f"\t{new_str}", flush=doFlush)
-                                    Events(f"\t{new_str}")
-                            print(TextColor.RESET, flush=doFlush)
-                            self.separator("-", len(chlogvStr), doFlush)
-
-                        except IndexError as e:
-                            print("IndexError:", e, flush=doFlush)
-                            Error(f"IndexError: {e}")
-                        except requests.exceptions.Timeout as e:
-                            print(
-                                "WEB_HTML: requests.exceptions.Timeout:",
-                                e,
-                                flush=doFlush,
-                            )
-                            Error(f"WEB_HTML: requests.exceptions.Timeout: {e}")
-                        except Exception as e:
-                            print(e)
-                            Error(e)
                         #################################
-                        print(
-                            f"\n{TextColor.BRIGHT_YELLOW}Downloading from:{TextColor.RESET}",
-                            flush=True,
-                        )
-                        Events(f"Downloading from:")
 
-                        def bar_custom(current, total, width=80):
-                            progress = current / total
-                            bar_width = int(width * progress)
-                            bar = f"[{'=' * bar_width}{' ' * (width - bar_width)}] {progress * 100:.1f}%"
-                            sys.stdout.write(f"\r{bar}")
-                            sys.stdout.flush()
-
-                        print(TextColor.BRIGHT_MAGENTA, flush=doFlush)
-                        file_id = releases["fileid"]
-                        downlink = f"{self.HOME_URL}download?fileid={str(file_id)}"
-                        Events("url: " + downlink)
-                        print(downlink, flush=True)
-                        repl_str = f"{self.PATH_OUT}/"
-                        """
-                        wget_test = (
-                            "http://speedtest.wdc01.softlayer.com/downloads/test500.zip"
-                        )
-                        wres = wget.download(
-                            wget_test, out=None, bar=bar_custom
-                        ).replace(repl_str, "")
-                        """
-                        response = wget.download(
-                            downlink, out=self.PATH_OUT, bar=bar_custom
-                        ).replace(repl_str, "")
-                        Events("Downloading file: " + response)
-
-                        print(TextColor.RESET, flush=doFlush)
-                        print(
-                            f"\nDone! Check output folder for file: {response}\n",
-                            flush=doFlush,
-                        )
-                        Events(f"Done! Check output folder for file: {response}")
-                        #################################
-                        self.separator("#", 50, doFlush)
-
-                        self.separator("_", 50, doFlush)
+                    # REGION changes END
                     else:
                         print(
                             f"{TextColor.GREEN}{mod['name']}{TextColor.RESET} is the latest!",
-                            flush=doFlush,
+                            flush=noFlush,
                         )
                         Events(f"{mod['name']} is the latest!")
                 except KeyError as e:
-                    print(e)
-                    Error(e)
+                    self.handle_exception(f"KeyError: {e}", noFlush)
                 except TypeError as e:
-                    print(e)
-                    Error(e)
+                    self.handle_exception(f"TypeError: {e}", noFlush)
                 except IndexError as e:
-                    print("IndexError:", e)
-                    Error(f"IndexError: {e}")
+                    self.handle_exception(f"IndexError: {e}", noFlush)
                 except requests.exceptions.Timeout as e:
-                    print("MOD: requests.exceptions.Timeout:", e)
-                    Error(f"MOD: requests.exceptions.Timeout: {e}")
+                    self.handle_exception(
+                        f"MOD: requests.exceptions.Timeout: {e}", noFlush
+                    )
                 except Exception as e:
-                    print(e)
-                    Error(e)
+                    self.handle_exception(e, noFlush)
+
             else:
-                print(f"modid key does not exist for mod: {mod['name']}")
-                Error(f"modid key does not exist for mod: {mod['name']}")
-        self.separator("_", 50, doFlush)
+                self.handle_exception(
+                    f"{TextColor.RED}modid key does not exist for mod:{TextColor.RESET} {mod['name']}",
+                    noFlush,
+                )
+
+        self.separator("_", 50, noFlush)
 
         if len(self.new_changes) == 0:
-            print("Everything is up to date!", flush=doFlush)
+            print("Everything is up to date!", flush=noFlush)
             Events("Everything is up to date!")
+        else:
+            prompt = input(
+                "Do you want to download the latest updated mods? (y/n): "
+            ).lower()
+            if prompt == "y":
+                await self.download_latest_mod()
+            else:
+                print("Ok, User skipped download of latest mods...", flush=noFlush)
+                Events("User skipped download of latest mods")
 
 
 if __name__ == "__main__":
     app = VSmodUpdater()
-    
+
     app.Run()
 
-    input("\n\nDownload complete, press Enter to exit!")
+    input("\n\nCheck complete, press Enter to exit!")
     Events("Exit...")
